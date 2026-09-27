@@ -6,42 +6,63 @@
 #include <esp_partition.h>
 
 #define BLOCK_SIZE 512
-#define BLOCK_COUNT 128
 
 USBMSC MSC;
-const esp_partition_t* store;
+const esp_partition_t* MBR;
+const esp_partition_t* FS;
+
+#define MBR_PARTITION_OFFSET 0xe00
+char MBR_RECORD[] = 
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x52\x97\x81\xc2\x00\x00\x00\x00"
+  "\x02\x00\x83\x03\x0b\x00\x01\x00\x00\x00\xc7\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x55\xaa";
+
+
+void write_MBR(const esp_partition_t* MBR) {
+  esp_partition_erase_range(MBR, 0, MBR->size);
+
+  esp_partition_write(MBR, 0xe00, MBR_RECORD, 512);
+}
+
+
 
 static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
-  // Write bufsize bytes from buffer to your storage at block lba
-  Serial.printf("WRITE box %u size %u\n", lba, bufsize);
-  const uint32_t SECTOR = 4096;
-  uint32_t addr = lba * BLOCK_SIZE + offset;          //where in flash im writing
-  uint32_t done = 0;
-
-  while (done < bufsize) {
-    uint32_t here           = addr + done;
-    uint32_t chunkStart     = (here / SECTOR) * SECTOR;
-    uint32_t within         = here - chunkStart;
-    uint32_t canDo          = SECTOR - within;
-    if (canDo > bufsize - done) canDo = bufsize - done;
-
-    static uint8_t chunk[4096];               // a scratch copy of one 4096 chunk
-
-    esp_partition_read(store, chunkStart, chunk, SECTOR);   //1. read old chunk
-    memcpy(chunk + within, buffer + done, canDo);                //2. patch in new data
-    esp_partition_erase_range(store, chunkStart, SECTOR);    //3. wipe whole chunk
-    esp_partition_write(store, chunkStart, chunk, SECTOR);   //4. write all back
-
-    done += canDo;
-  }
   return bufsize;
 }
 
 static int32_t onRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
-  // Read bufsize bytes into buffer from storage at block lba
-  Serial.printf("WRITE box %u size %u\n", lba, bufsize);
-
-  esp_partition_read(store, lba * 512 + offset, buffer, bufsize);
+  if (lba == 0) {
+    esp_partition_read(MBR, MBR_PARTITION_OFFSET + offset, buffer, bufsize);
+  }
   return bufsize;
 }
 
@@ -51,29 +72,40 @@ static bool onStartStop(uint8_t power_condition, bool start, bool load_eject) {
 
 
 void setup() {
-    delay(10000);
-    Serial.begin(9600);
-    store = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "storage");
-    
-    if (store == nullptr) {
-        Serial.println("Could not find 'storage' partition! Check partitions.csv");
-        return;   // stop here instead of crashing
-    }
-    MSC.vendorID("ESP32");
-    MSC.productID("USB_MSC");
-    MSC.productRevision("1.0");
+  delay(1000);
+  Serial.begin(9600);
+  Serial.println("Setup initialized ...");
 
-    MSC.onRead(onRead);
-    MSC.onWrite(onWrite);
+  Serial.println("Searching partitions");
+  MBR = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t) 100, "MBR");
+  FS = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t) 101, "FS");
+  
+  if (MBR == nullptr) {
+      Serial.println("Could not find 'storage' partition! Check partitions.csv");
+  }
 
-    MSC.onStartStop(onStartStop);
-    MSC.mediaPresent(true);
-    MSC.begin(store->size / BLOCK_SIZE, BLOCK_SIZE);
+  if (FS == nullptr) {
+      Serial.println("Could not find 'FS' parition! Check paritions.csv");
+  }
 
-    USB.begin();
+  
+  write_MBR(MBR);
 
-    Serial.println("Setup phase completed");
 
+  MSC.vendorID("ESP32");
+  MSC.productID("USB_MSC");
+  MSC.productRevision("1.0");
+
+  MSC.onRead(onRead);
+  MSC.onWrite(onWrite);
+
+  MSC.onStartStop(onStartStop);
+  MSC.mediaPresent(true);
+  MSC.begin((FS->size / BLOCK_SIZE) + 1, BLOCK_SIZE);
+
+  USB.begin();
+
+  Serial.println("Setup phase completed");
 }
 
 void loop() {
