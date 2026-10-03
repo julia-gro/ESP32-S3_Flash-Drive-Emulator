@@ -4,12 +4,16 @@
 #include <USBMSC.h>
 #include <FirmwareMSC.h>
 #include <esp_partition.h>
+#include <esp_vfs_fat.h>
+#include <wear_levelling.h>
+
 
 #define BLOCK_SIZE 512
 
 USBMSC MSC;
 const esp_partition_t* MBR;
 const esp_partition_t* FS;
+wl_handle_t FS_wl_handle = WL_INVALID_HANDLE;
 
 #define MBR_PARTITION_OFFSET 0xe00
 char MBR_RECORD[] = 
@@ -47,6 +51,13 @@ char MBR_RECORD[] =
   "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x55\xaa";
 
 
+esp_vfs_fat_mount_config_t mount_config = {
+    .format_if_mount_failed = true,
+    .allocation_unit_size = 4096,
+  };
+
+
+
 void write_MBR(const esp_partition_t* MBR) {
   esp_partition_erase_range(MBR, 0, MBR->size);
 
@@ -78,18 +89,24 @@ void setup() {
 
   Serial.println("Searching partitions");
   MBR = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t) 100, "MBR");
-  FS = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t) 101, "FS");
+  FS = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "FS");
   
   if (MBR == nullptr) {
-      Serial.println("Could not find 'storage' partition! Check partitions.csv");
+    Serial.println("Could not find 'storage' partition! Check partitions.csv");
+    return;
   }
 
   if (FS == nullptr) {
-      Serial.println("Could not find 'FS' parition! Check paritions.csv");
+    Serial.println("Could not find 'FS' parition! Check paritions.csv");
+    return;
   }
 
   
   write_MBR(MBR);
+
+  wl_mount(FS, &FS_wl_handle);
+
+  esp_vfs_fat_spiflash_mount("/FS", "FS", &mount_config, &FS_wl_handle);
 
 
   MSC.vendorID("ESP32");
