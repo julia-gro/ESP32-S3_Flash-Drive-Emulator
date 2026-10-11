@@ -9,13 +9,14 @@
 
 
 #define BLOCK_SIZE 512
+#define DEBUG 0
 
 USBMSC MSC;
-const esp_partition_t* MBR;
+const esp_partition_t* PART;
 const esp_partition_t* FS;
 wl_handle_t FS_wl_handle = WL_INVALID_HANDLE;
 
-#define MBR_PARTITION_OFFSET 0xe00
+#define MBR_PARTITION_OFFSET 0
 char MBR_RECORD[] = 
   "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
   "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
@@ -58,10 +59,10 @@ esp_vfs_fat_mount_config_t mount_config = {
 
 
 
-void write_MBR(const esp_partition_t* MBR) {
-  esp_partition_erase_range(MBR, 0, MBR->size);
+void write_MBR(const esp_partition_t* PART) {
+  esp_partition_erase_range(PART, 0, PART->size);
 
-  esp_partition_write(MBR, 0xe00, MBR_RECORD, 512);
+  esp_partition_write(PART, MBR_PARTITION_OFFSET, MBR_RECORD, 512);
 }
 
 
@@ -71,9 +72,23 @@ static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t 
 }
 
 static int32_t onRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
-  if (lba == 0) {
-    esp_partition_read(MBR, MBR_PARTITION_OFFSET + offset, buffer, bufsize);
+  Serial.printf("READ: lba=%i offset=%i blocksize=%i\n", lba, offset, bufsize);
+
+  #if DEBUG
+  char* debug = (char*) malloc(bufsize);
+  esp_partition_read(PART, (512 * lba) + offset, debug, bufsize);
+  for (int i = 0; i < bufsize; i += 8) {
+    Serial.printf("%02X %02X %02X %02X %02X %02X %02X %02X", debug[i], debug[i+1], debug[i+2], debug[i+3], debug[i+4], debug[i+5], debug[i+6], debug[i+7]);
+
+    if (i % 16 != 0) {
+      Serial.print("    ");
+    } else {
+      Serial.println("");
+    }
   }
+  #endif
+
+  esp_partition_read(PART, (512 * lba) + MBR_PARTITION_OFFSET + offset, buffer, bufsize);
   return bufsize;
 }
 
@@ -84,14 +99,20 @@ static bool onStartStop(uint8_t power_condition, bool start, bool load_eject) {
 
 void setup() {
   delay(1000);
-  Serial.begin(9600);
+  Serial.begin(BAUD_RATE);
   Serial.println("Setup initialized ...");
 
   Serial.println("Searching partitions");
-  MBR = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t) 100, "MBR");
-  FS = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "FS");
+  PART = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "FS");
+
+  esp_partition_t* modified_partition = (esp_partition_t*) malloc(sizeof(esp_partition_t));
+  *modified_partition = *PART;
+  modified_partition->address += MBR_PARTITION_OFFSET + 512;
+  modified_partition->size -= (MBR_PARTITION_OFFSET + 512);
+
+  FS = (const esp_partition_t*) modified_partition;
   
-  if (MBR == nullptr) {
+  if (PART == nullptr) {
     Serial.println("Could not find 'storage' partition! Check partitions.csv");
     return;
   }
@@ -102,11 +123,15 @@ void setup() {
   }
 
   
-  write_MBR(MBR);
+  write_MBR(PART);
 
   wl_mount(FS, &FS_wl_handle);
 
   esp_vfs_fat_spiflash_mount("/FS", "FS", &mount_config, &FS_wl_handle);
+
+  char trash[4096];
+  memset(trash, 0x41, 4096);
+  esp_partition_write(FS, 0, trash, 4096);
 
 
   MSC.vendorID("ESP32");
